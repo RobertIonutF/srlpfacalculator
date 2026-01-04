@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Income, PFAOptions, SRLOptions } from '../store/useTaxStore';
+import type { Income, PFAOptions, SRLOptions } from '../store/useTaxStore';
 import {
   CASS_MIN_THRESHOLD, CASS_MAX_THRESHOLD, CASS_MINIMUM, CASS_MAXIMUM,
   CAS_THRESHOLD_LOW, CAS_THRESHOLD_HIGH, CAS_TIER1, CAS_TIER2,

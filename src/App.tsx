@@ -3,14 +3,14 @@ import { useTaxStore } from './store/useTaxStore';
 
 // ============ 2026 TAX CONSTANTS ============
 
-// PFA Constants (all in RON)
+// PFA Constants (all in RON) - 2026 verified values
 const MINIMUM_SALARY = 4050;
 const CASS_MIN_THRESHOLD = 6 * MINIMUM_SALARY;   // 24,300 RON
-const CASS_MAX_THRESHOLD = 72 * MINIMUM_SALARY;  // 291,600 RON
+const CASS_MAX_THRESHOLD = 60 * MINIMUM_SALARY;  // 243,000 RON (corrected from 72x)
 const CAS_THRESHOLD_LOW = 12 * MINIMUM_SALARY;   // 48,600 RON
 const CAS_THRESHOLD_HIGH = 24 * MINIMUM_SALARY;  // 97,200 RON
 const CASS_MINIMUM = CASS_MIN_THRESHOLD * 0.10;  // 2,430 RON
-const CASS_MAXIMUM = CASS_MAX_THRESHOLD * 0.10;  // 29,160 RON
+const CASS_MAXIMUM = CASS_MAX_THRESHOLD * 0.10;  // 24,300 RON (corrected)
 const CAS_TIER1 = CAS_THRESHOLD_LOW * 0.25;      // 12,150 RON
 const CAS_TIER2 = CAS_THRESHOLD_HIGH * 0.25;     // 24,300 RON
 const INCOME_TAX_RATE = 0.10;
@@ -48,6 +48,7 @@ export default function TaxCalculator() {
     setMonthlyExpenses,
     setDisplayCurrency,
     setSrlOptions,
+    setPfaOptions,
     saveProject,
     loadProject,
     deleteProject,
@@ -56,7 +57,7 @@ export default function TaxCalculator() {
     importProjects,
   } = useTaxStore();
   
-  const { mode, incomes, monthlyExpenses, displayCurrency, srlOptions } = currentProject;
+  const { mode, incomes, monthlyExpenses, displayCurrency, srlOptions, pfaOptions } = currentProject;
   
   // Project management state
   const [projectName, setProjectName] = useState('');
@@ -112,7 +113,13 @@ export default function TaxCalculator() {
   };
 
   const updateIncome = (id: number, field: string, value: any) => {
-    setIncomes(incomes.map(inc => inc.id === id ? { ...inc, [field]: value } : inc));
+    // If updating amount, convert from display currency to RON for storage
+    if (field === 'amount' && displayCurrency !== 'RON') {
+      const ronValue = value / rates[displayCurrency as keyof typeof rates];
+      setIncomes(incomes.map(inc => inc.id === id ? { ...inc, [field]: ronValue } : inc));
+    } else {
+      setIncomes(incomes.map(inc => inc.id === id ? { ...inc, [field]: value } : inc));
+    }
   };
 
   const removeIncome = (id: number) => {
@@ -187,11 +194,20 @@ export default function TaxCalculator() {
     const annualExpenses = monthlyExpenses * 12;
     const netIncome = Math.max(0, annualGross - annualExpenses);
 
-    // CASS
+    // CASS - adjusted for employed people
     let cass;
-    if (netIncome < CASS_MIN_THRESHOLD) cass = CASS_MINIMUM;
-    else if (netIncome > CASS_MAX_THRESHOLD) cass = CASS_MAXIMUM;
-    else cass = netIncome * 0.10;
+    if (pfaOptions.isEmployed && netIncome < CASS_MIN_THRESHOLD) {
+      // If employed AND PFA net income < 6x min salary, no additional CASS (already covered by employment)
+      cass = 0;
+    } else if (pfaOptions.isEmployed) {
+      // Employed but PFA income exceeds threshold - pay CASS on PFA income (no minimum)
+      cass = Math.min(netIncome * 0.10, CASS_MAXIMUM);
+    } else {
+      // Not employed - standard logic with minimums
+      if (netIncome < CASS_MIN_THRESHOLD) cass = CASS_MINIMUM;
+      else if (netIncome > CASS_MAX_THRESHOLD) cass = CASS_MAXIMUM;
+      else cass = netIncome * 0.10;
+    }
 
     // CAS
     let cas, casStatus;
@@ -229,9 +245,10 @@ export default function TaxCalculator() {
     const accountingCost = (SRL_ACCOUNTING_LOW + SRL_ACCOUNTING_HIGH) / 2;
     const operatingCosts = accountingCost + SRL_BANK_FEES + SRL_DIGITAL_SIGNATURE;
 
-    // VAT status
-    const isVATRegistered = annualRevenue > VAT_THRESHOLD;
-    const vatCollected = isVATRegistered ? annualRevenue * VAT_RATE : 0;
+    // VAT status - now based on user selection
+    const isVATRegistered = srlOptions.vatStatus !== 'not_registered';
+    const domesticRevenue = annualRevenue * (1 - srlOptions.euRevenuePercent / 100);
+    const vatCollected = isVATRegistered ? domesticRevenue * VAT_RATE : 0;
     const vatOnExpenses = isVATRegistered ? annualExpenses * VAT_RATE : 0;
     const vatToPay = Math.max(0, vatCollected - vatOnExpenses);
 
@@ -239,17 +256,25 @@ export default function TaxCalculator() {
     const canBeMicro = annualRevenue <= MICRO_REVENUE_LIMIT;
     const isMicro = srlOptions.isMicro && canBeMicro;
 
-    // Salary costs (if applicable)
+    // Salary costs (if applicable) - FIXED 2026 rates
     let salaryCostToCompany = 0;
     let salaryNetToOwner = 0;
+    let salaryEmployerCAM = 0;
+    let salaryEmployeeCAS = 0;
+    let salaryEmployeeCASS = 0;
+    let salaryIncomeTax = 0;
     if (srlOptions.paySalary) {
       const grossSalary = srlOptions.monthlySalary * 12;
-      const employerContributions = grossSalary * 0.35;
-      const employeeContributions = grossSalary * 0.35;
-      const salaryIncomeTax = (grossSalary - employeeContributions) * 0.10;
+      // Employer pays only CAM (2.25%)
+      salaryEmployerCAM = grossSalary * 0.0225;
+      // Employee pays CAS (25%) + CASS (10%)
+      salaryEmployeeCAS = grossSalary * 0.25;
+      salaryEmployeeCASS = grossSalary * 0.10;
+      const taxableNetSalary = grossSalary - salaryEmployeeCAS - salaryEmployeeCASS;
+      salaryIncomeTax = taxableNetSalary * 0.10;
       
-      salaryCostToCompany = grossSalary + employerContributions;
-      salaryNetToOwner = grossSalary - employeeContributions - salaryIncomeTax;
+      salaryCostToCompany = grossSalary + salaryEmployerCAM;
+      salaryNetToOwner = grossSalary - salaryEmployeeCAS - salaryEmployeeCASS - salaryIncomeTax;
     }
 
     // Gross profit
@@ -277,18 +302,20 @@ export default function TaxCalculator() {
     // Total to owner
     const totalToOwner = salaryNetToOwner + dividendNet;
 
-    // Total government taxes
-    const totalGovTaxes = corporateTax + dividendTax + vatToPay + 
-      (srlOptions.paySalary ? salaryCostToCompany - srlOptions.monthlySalary * 12 + 
-        (srlOptions.monthlySalary * 12 * 0.35) + (srlOptions.monthlySalary * 12 * 0.65 * 0.10) : 0);
+    // Total government taxes (EXCLUDING VAT - it's a pass-through tax)
+    const salaryTaxesTotal = srlOptions.paySalary 
+      ? salaryEmployerCAM + salaryEmployeeCAS + salaryEmployeeCASS + salaryIncomeTax 
+      : 0;
+    const totalGovTaxes = corporateTax + dividendTax + salaryTaxesTotal;
 
     const effectiveRate = annualRevenue > 0 ? (totalGovTaxes / annualRevenue) * 100 : 0;
 
     return {
       annualRevenue, annualExpenses, operatingCosts,
-      isVATRegistered, vatToPay,
+      isVATRegistered, vatToPay, vatCollected, vatOnExpenses,
       canBeMicro, isMicro,
       salaryCostToCompany, salaryNetToOwner,
+      salaryEmployerCAM, salaryEmployeeCAS, salaryEmployeeCASS, salaryIncomeTax,
       grossProfit, corporateTax, netProfit,
       dividendAmount, dividendTax, dividendNet,
       retainedProfit, totalToOwner,
@@ -561,6 +588,49 @@ export default function TaxCalculator() {
           </div>
         )}
 
+        {/* PFA Options */}
+        {mode === 'pfa' && (
+          <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-4 mb-6 border border-slate-700">
+            <h3 className="text-white font-medium mb-3">Opțiuni PFA</h3>
+            
+            <div className="space-y-4">
+              {/* Employment status */}
+              <div className="pt-2">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <p className="text-slate-300 text-sm">Am și contract de muncă</p>
+                    <p className="text-slate-500 text-xs">Dacă ești angajat, CASS-ul poate fi scutit pentru venituri mici din PFA</p>
+                  </div>
+                  <button
+                    onClick={() => setPfaOptions({...pfaOptions, isEmployed: !pfaOptions.isEmployed})}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                      pfaOptions.isEmployed
+                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'
+                        : 'bg-slate-600/50 text-slate-400 border border-slate-500/50'
+                    }`}
+                  >
+                    {pfaOptions.isEmployed ? '✓ Da' : 'Nu'}
+                  </button>
+                </div>
+                
+                {pfaOptions.isEmployed && (
+                  <div className="flex items-center gap-3 mt-2">
+                    <label className="text-slate-400 text-sm">Salariu brut lunar din angajare:</label>
+                    <input
+                      type="number"
+                      value={pfaOptions.employmentGrossSalary || ''}
+                      onChange={(e) => setPfaOptions({...pfaOptions, employmentGrossSalary: Number(e.target.value) || 0})}
+                      className="w-32 bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm"
+                      placeholder="0"
+                    />
+                    <span className="text-slate-500 text-sm">RON</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* SRL Options */}
         {mode === 'srl' && (
           <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-4 mb-6 border border-slate-700">
@@ -621,6 +691,47 @@ export default function TaxCalculator() {
                   <span>0% (reinvestit)</span>
                   <span>100% (extrag tot)</span>
                 </div>
+              </div>
+
+              {/* VAT options */}
+              <div className="pt-2 border-t border-slate-700">
+                <div className="flex justify-between mb-2">
+                  <div>
+                    <p className="text-slate-300 text-sm">Statut TVA</p>
+                    <p className="text-slate-500 text-xs">Înregistrare obligatorie peste {formatRON(VAT_THRESHOLD)} RON/an</p>
+                  </div>
+                  <select
+                    value={srlOptions.vatStatus}
+                    onChange={(e) => setSrlOptions({...srlOptions, vatStatus: e.target.value as 'not_registered' | 'registered' | 'voluntary'})}
+                    className="bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm"
+                  >
+                    <option value="not_registered">Neînregistrat</option>
+                    <option value="registered">Înregistrat</option>
+                    <option value="voluntary">Înregistrat voluntar</option>
+                  </select>
+                </div>
+                
+                {srlOptions.vatStatus !== 'not_registered' && (
+                  <div className="mt-3">
+                    <div className="flex justify-between mb-1">
+                      <p className="text-slate-300 text-sm">Facturare intra-UE (TVA 0%)</p>
+                      <p className="text-blue-400 font-medium">{srlOptions.euRevenuePercent}%</p>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="5"
+                      value={srlOptions.euRevenuePercent}
+                      onChange={(e) => setSrlOptions({...srlOptions, euRevenuePercent: Number(e.target.value)})}
+                      className="w-full accent-blue-500"
+                    />
+                    <div className="flex justify-between text-xs text-slate-500 mt-1">
+                      <span>0% (doar intern)</span>
+                      <span>100% (doar UE)</span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Salary option */}
@@ -700,11 +811,14 @@ export default function TaxCalculator() {
                           />
                         </div>
                         <div className="w-36">
-                          <label className="block text-slate-500 text-xs mb-1">Sumă (RON)</label>
+                          <label className="block text-slate-500 text-xs mb-1">Sumă ({displayCurrency})</label>
                           <input
                             type="number"
                             placeholder="0"
-                            value={income.amount || ''}
+                            value={displayCurrency === 'RON' 
+                              ? income.amount || '' 
+                              : Math.round(income.amount * rates[displayCurrency as keyof typeof rates]) || ''
+                            }
                             onChange={(e) => updateIncome(income.id, 'amount', Number(e.target.value) || 0)}
                             className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500"
                           />
@@ -730,7 +844,11 @@ export default function TaxCalculator() {
                               min="1"
                               max="12"
                               value={income.months}
-                              onChange={(e) => updateIncome(income.id, 'months', Math.min(12, Math.max(1, Number(e.target.value) || 1)))}
+                              onChange={(e) => updateIncome(income.id, 'months', Number(e.target.value) || 1)}
+                              onBlur={(e) => {
+                                const value = Math.min(12, Math.max(1, Number(e.target.value) || 1));
+                                updateIncome(income.id, 'months', value);
+                              }}
                               className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
                             />
                           </div>
@@ -839,7 +957,9 @@ export default function TaxCalculator() {
                   <span>🏥</span>
                   <span className="text-slate-300">CASS (sănătate)</span>
                   <span className="text-slate-500 text-xs">
-                    {pfaCalculations.netIncome < CASS_MIN_THRESHOLD ? 'minim' : 
+                    {pfaOptions.isEmployed && pfaCalculations.netIncome < CASS_MIN_THRESHOLD ? 'scutit (angajat)' :
+                     pfaOptions.isEmployed ? '10%' :
+                     pfaCalculations.netIncome < CASS_MIN_THRESHOLD ? 'minim' : 
                      pfaCalculations.netIncome > CASS_MAX_THRESHOLD ? 'maxim' : '10%'}
                   </span>
                 </div>
@@ -943,16 +1063,6 @@ export default function TaxCalculator() {
                 </div>
               )}
 
-              {srlCalculations.isVATRegistered && (
-                <div className="flex justify-between items-center py-2 px-3 bg-amber-500/10 rounded-lg border border-amber-500/20">
-                  <div className="flex items-center gap-3">
-                    <span>📋</span>
-                    <span className="text-amber-300">TVA de plătit</span>
-                    <span className="text-amber-500/70 text-xs">19%</span>
-                  </div>
-                  <span className="text-amber-400 font-medium">{formatAmount(srlCalculations.vatToPay)}</span>
-                </div>
-              )}
             </div>
 
             {/* What you get */}
@@ -995,12 +1105,34 @@ export default function TaxCalculator() {
               )}
             </div>
 
-            {/* VAT status */}
+            {/* VAT status - shown separately as it's a pass-through tax */}
+            {srlCalculations.isVATRegistered && srlCalculations.vatToPay > 0 && (
+              <div className="mt-4 p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl">
+                <div className="flex justify-between items-center mb-2">
+                  <div>
+                    <p className="text-amber-300 font-medium">TVA de virat la stat</p>
+                    <p className="text-amber-500/70 text-xs">Impozit indirect (colectat de la clienți)</p>
+                  </div>
+                  <p className="text-2xl font-bold text-amber-400">{formatAmount(srlCalculations.vatToPay)}</p>
+                </div>
+                <div className="text-xs text-amber-500/70 space-y-1">
+                  <div className="flex justify-between">
+                    <span>TVA colectat:</span>
+                    <span>{formatAmount(srlCalculations.vatCollected)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>TVA deductibil:</span>
+                    <span>-{formatAmount(srlCalculations.vatOnExpenses)}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+            
             <div className="mt-4 p-3 bg-slate-700/20 rounded-lg">
               <p className="text-slate-400 text-xs">
                 {srlCalculations.isVATRegistered 
-                  ? `⚠️ Peste pragul TVA (${formatRON(VAT_THRESHOLD)} RON) - trebuie să te înregistrezi`
-                  : `✓ Sub pragul TVA (${formatRON(VAT_THRESHOLD)} RON) - scutit de TVA`
+                  ? `ℹ️ Înregistrat în scopuri de TVA`
+                  : `✓ Neînregistrat TVA (sub ${formatRON(VAT_THRESHOLD)} RON sau opțional)`
                 }
               </p>
             </div>

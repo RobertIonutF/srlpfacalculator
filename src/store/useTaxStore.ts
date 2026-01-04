@@ -16,6 +16,13 @@ export interface SRLOptions {
   dividendPercent: number;
   paySalary: boolean;
   monthlySalary: number;
+  vatStatus: 'not_registered' | 'registered' | 'voluntary';
+  euRevenuePercent: number;
+}
+
+export interface PFAOptions {
+  isEmployed: boolean;
+  employmentGrossSalary: number;
 }
 
 export interface ProjectData {
@@ -24,6 +31,7 @@ export interface ProjectData {
   monthlyExpenses: number;
   displayCurrency: 'RON' | 'EUR' | 'USD';
   srlOptions: SRLOptions;
+  pfaOptions: PFAOptions;
 }
 
 export interface Project {
@@ -55,6 +63,7 @@ interface TaxStore {
   setMonthlyExpenses: (expenses: number) => void;
   setDisplayCurrency: (currency: 'RON' | 'EUR' | 'USD') => void;
   setSrlOptions: (options: SRLOptions) => void;
+  setPfaOptions: (options: PFAOptions) => void;
 }
 
 // ============ DEFAULT STATE ============
@@ -71,6 +80,12 @@ const defaultProjectData: ProjectData = {
     dividendPercent: 50,
     paySalary: false,
     monthlySalary: 4050,
+    vatStatus: 'not_registered',
+    euRevenuePercent: 0,
+  },
+  pfaOptions: {
+    isEmployed: false,
+    employmentGrossSalary: 0,
   },
 };
 
@@ -229,6 +244,12 @@ export const useTaxStore = create<TaxStore>()(
       setSrlOptions: (srlOptions: SRLOptions) => {
         set(state => ({
           currentProject: { ...state.currentProject, srlOptions },
+        }));
+      },
+
+      setPfaOptions: (pfaOptions: PFAOptions) => {
+        set(state => ({
+          currentProject: { ...state.currentProject, pfaOptions },
         }));
       },
     }),

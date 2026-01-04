@@ -57,7 +57,21 @@ export default function TaxCalculator() {
     importProjects,
   } = useTaxStore();
   
-  const { mode, incomes, monthlyExpenses, displayCurrency, srlOptions, pfaOptions } = currentProject;
+  const { 
+    mode, 
+    incomes, 
+    monthlyExpenses, 
+    displayCurrency, 
+    srlOptions: rawSrlOptions, 
+    pfaOptions = { isEmployed: false, employmentGrossSalary: 0 } 
+  } = currentProject;
+  
+  // Add defaults for new SRL options (for backwards compatibility with old saved projects)
+  const srlOptions = {
+    ...rawSrlOptions,
+    vatStatus: rawSrlOptions.vatStatus || 'not_registered',
+    euRevenuePercent: rawSrlOptions.euRevenuePercent ?? 0,
+  } as typeof rawSrlOptions & { vatStatus: 'not_registered' | 'registered' | 'voluntary'; euRevenuePercent: number };
   
   // Project management state
   const [projectName, setProjectName] = useState('');
